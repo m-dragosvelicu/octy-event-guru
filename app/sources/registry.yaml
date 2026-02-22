@@ -1,0 +1,17 @@
+- area_id: "default-city"
+  provider: "source_a"
+  seed_urls:
+    - "https://example.com/events"
+  sport_hint: "running"
+  enabled: false
+  allowed_domains:
+    - "example.com"
+
+- area_id: "default-city"
+  provider: "source_b"
+  seed_urls:
+    - "https://events.example.org/calendar"
+  sport_hint: "cycling"
+  enabled: false
+  allowed_domains:
+    - "events.example.org"

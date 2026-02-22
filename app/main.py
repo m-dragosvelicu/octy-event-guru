@@ -3,21 +3,22 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import auth, bookmark, folders
+from .api.routes import health, ingest
+from .core.logging import configure_logging
 
+configure_logging()
 logger = logging.getLogger(__name__)
-logging.info("Starting FastAPI app")
+logger.info("Starting FastAPI app")
 
-app = FastAPI()
+app = FastAPI(title="event-guru")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081"],  # Allow only this origin
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(bookmark.router)
-app.include_router(folders.router)
+app.include_router(health.router)
+app.include_router(ingest.router)

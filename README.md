@@ -1,63 +1,88 @@
-# Minimal template for FastAPI, Supabase, SQLModel and Alembic
+# event-guru
 
-This is a minimal template for a FastAPI project with Supabase, SQLModel and Alembic.
+FastAPI service that ingests external event listings and writes normalized events to Supabase.
 
-## Features
+## Stack
 
-- FastAPI for building APIs
-- Supabase for authentication and database
-- SQLModel for ORM
-- Alembic for database versionning and migrations
-- uv for dependency management
+- FastAPI app with `/health` and `/v1/ingest/*` routes
+- Source crawling with `requests` + `tenacity`
+- Event extraction via JSON-LD (`extruct`) with HTML fallback (`BeautifulSoup`)
+- Date normalization with `dateparser`
+- Geocoding via Mapbox forward geocoding API
+- Deduplication using `(external_provider, external_event_id)`
+- Supabase writes using service-role key
 
-The project features a basic example of a bookmark application, supporting CRUD operations with Supabase authentication (including compatibility with Swagger's Auth).
+## Project layout
 
-## Installation
+```text
+app/
+  main.py
+  api/routes/{health.py, ingest.py}
+  core/{config.py, logging.py}
+  domain/models.py
+  sources/{registry.yaml, base.py, adapters/*}
+  extract/{jsonld.py, html_fallback.py, normalize.py}
+  geocode/{mapbox_client.py, scoring.py}
+  sink/{supabase_writer.py, dedupe.py}
+  jobs/ingest_job.py
+tests/
+```
 
-1. Clone the repository:
-    ```bash
-    git clone https://github.com/yourusername/aipocket.git
-    cd aipocket
-    ```
+## Environment
 
-2. Install UV:
-    ```bash
-    pip install uv
-    ```
-    You don't have to do that in a virtual environment, as UV is a standalone tool.
-    UV will later on install the dependencies for you in a virtual environnement.
+Copy `.env.example` to `.env` and set:
 
-## Usage
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `EVENT_GURU_HOST_USER_ID`
+- `MAPBOX_ACCESS_TOKEN`
+- `MAPBOX_PERMANENT=true`
+- `INGEST_API_TOKEN`
+- `DEFAULT_AREA_ID`
 
-1. Set up your environment variables for Supabase and database configuration or use an `.env` file based on the given example:
-    ```bash
-    cp .env.example .env
-    ```
+## Supabase dedupe extension
 
-    Update the `.env` file with your Supabase URL, Supabase key, database URL, and database URL for migrations.
+```sql
+alter table public.events
+  add column if not exists external_provider text,
+  add column if not exists external_event_id text,
+  add column if not exists external_source_url text,
+  add column if not exists external_confidence numeric;
 
-2. (Optional) In case you perform modifications to `models.py` (ie. modification to the DB scheme): Generate a new Alembic migration:
-    ```bash
-    uv run alembic revision --autogenerate -m "Your message here"
-    ```
+create unique index if not exists events_external_unique
+on public.events (external_provider, external_event_id)
+where external_provider is not null and external_event_id is not null;
+```
 
-3. Run the database migrations:
-    ```bash
-    uv run alembic upgrade head
-    ```
+## Install and run
 
-4. Start the FastAPI server:
-    ```bash
-    uv run uvicorn app.main:app --reload --reload-dir app
-    ```
-    At the first run, UV will create a virtual environment and install the dependencies inside it.
+```bash
+uv sync
+uv run uvicorn app.main:app --reload --reload-dir app
+```
 
-5. Access the API documentation at `http://127.0.0.1:8000/docs`.
+## API
 
-## Contributing
+- `GET /health`
+- `GET /v1/ingest/health`
+- `POST /v1/ingest/run` (requires `Authorization: Bearer <INGEST_API_TOKEN>`)
+- `POST /v1/ingest/preview` (token-protected, forced dry-run)
 
-Contributions are welcome! Please open an issue or submit a pull request.
+### Example run
 
-## License
+```bash
+curl -X POST http://127.0.0.1:8000/v1/ingest/run \
+  -H "Authorization: Bearer $INGEST_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"area_id":"default-city","dry_run":true,"max_events":50}'
+```
 
-This project is licensed under the MIT License.
+## Scheduling
+
+Use GitHub Actions cron (hourly) to call `POST /v1/ingest/run` with `INGEST_API_TOKEN`.
+
+## Notes
+
+- Keep `MAPBOX_PERMANENT=true` when storing coordinates.
+- Create a bot host account in Supabase Auth and set its UUID as `EVENT_GURU_HOST_USER_ID`.
+- Run summaries are appended to `ingest_runs.json`.
