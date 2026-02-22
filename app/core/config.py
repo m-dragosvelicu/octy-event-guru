@@ -1,5 +1,7 @@
 from functools import lru_cache
+from pathlib import Path
 
+import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,6 +20,7 @@ class Settings(BaseSettings):
     mapbox_permanent: bool = Field(default=True, validation_alias="MAPBOX_PERMANENT")
     ingest_api_token: str = Field(validation_alias="INGEST_API_TOKEN")
     default_area_id: str = Field(validation_alias="DEFAULT_AREA_ID")
+    ticketmaster_api_key: str = Field(default="", validation_alias="TICKETMASTER_API_KEY")
 
     requests_timeout_seconds: int = 10
     requests_user_agent: str = "event-guru-ingest/0.1"
@@ -33,3 +36,14 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def load_area_configs(path: str = "app/sources/areas.yaml") -> list:
+    from ..domain.models import AreaConfig
+
+    config_path = Path(path)
+    if not config_path.exists():
+        return []
+    with open(config_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or []
+    return [AreaConfig.model_validate(item) for item in data]

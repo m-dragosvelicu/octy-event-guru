@@ -3,6 +3,17 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class AreaConfig(BaseModel):
+    area_id: str
+    lat: float
+    lng: float
+    radius_km: int = 50
+    timezone: str = "UTC"
+    horizon_days: int = 7
+    default_activity_slug: str | None = None
+    providers: list[str] = Field(default_factory=list)
+
+
 class SourceConfig(BaseModel):
     area_id: str
     provider: str
@@ -54,6 +65,9 @@ class NormalizedEvent(BaseModel):
     external_confidence: float | None = None
     location_lat: float | None = None
     location_lng: float | None = None
+    timezone: str | None = None
+    start_time_local: str | None = None
+    end_time_local: str | None = None
 
 
 class IngestSummary(BaseModel):
@@ -64,3 +78,5 @@ class IngestSummary(BaseModel):
     inserted: int = 0
     skipped_duplicates: int = 0
     rejected_low_precision: int = 0
+    dropped_no_coords: int = 0
+    with_source_coords: int = 0
