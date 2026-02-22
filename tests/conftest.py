@@ -1,14 +1,10 @@
-"""Root-level test fixtures shared across the entire test suite.
-
-Session-scoped fixtures spin up the integration environment (env vars,
-clients, health-check waits).  Function-scoped fixtures handle per-test
-cleanup so tests are hermetic.
-
-All integration-only imports are deferred so that unit tests can run
-without jwt / redis / requests / psycopg2 installed.
-"""
+"""Root-level fixtures for real integration tests."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import time
 import uuid
@@ -21,11 +17,24 @@ _JWT_SECRET = "super-secret-jwt-key-for-testing-only-do-not-use-in-prod"
 
 
 def _generate_test_jwt(role: str = "service_role") -> str:
-    """Create an HS256 JWT that PostgREST will accept."""
-    import jwt
-
+    """Create an HS256 JWT using stdlib only."""
+    header = {"alg": "HS256", "typ": "JWT"}
     payload = {"role": role, "iss": "event-guru-tests"}
-    return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    header_part = _b64url(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payload_part = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{header_part}.{payload_part}"
+
+    signature = hmac.new(
+        _JWT_SECRET.encode("utf-8"),
+        signing_input.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    signature_part = _b64url(signature)
+    return f"{signing_input}.{signature_part}"
 
 
 # ── Session-scoped fixtures ──────────────────────────────────────────
@@ -50,9 +59,6 @@ def integration_env() -> dict[str, str]:
         "MAPBOX_PERMANENT": "false",
         "INGEST_API_TOKEN": test_api_token,
         "DEFAULT_AREA_ID": "bucharest",
-        "REDIS_URL": "redis://localhost:6379/0",
-        "CELERY_BROKER_URL": "redis://localhost:6379/0",
-        "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
     }
     for key, value in env.items():
         os.environ[key] = value
@@ -94,18 +100,6 @@ def supabase_client(integration_env: dict[str, str], wait_for_postgrest: None):
         integration_env["SUPABASE_URL"],
         integration_env["SUPABASE_SERVICE_ROLE_KEY"],
     )
-
-
-@pytest.fixture(scope="session")
-def redis_client(integration_env: dict[str, str]):
-    """Real Redis client connected to the test stack."""
-    import redis as redis_lib
-
-    client = redis_lib.Redis.from_url(
-        integration_env["REDIS_URL"], decode_responses=True,
-    )
-    client.ping()
-    return client
 
 
 # ── Function-scoped fixtures ─────────────────────────────────────────

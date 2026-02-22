@@ -11,7 +11,7 @@ class AreaConfig(BaseModel):
     timezone: str = "UTC"
     horizon_days: int = 7
     default_activity_slug: str | None = None
-    providers: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
 
 
 class SourceConfig(BaseModel):
@@ -43,6 +43,8 @@ class ExtractedEvent(BaseModel):
     end_time_text: str | None = None
     location_name: str | None = None
     location_address: str | None = None
+    location_lat: float | None = None
+    location_lng: float | None = None
     canonical_id: str | None = None
 
 

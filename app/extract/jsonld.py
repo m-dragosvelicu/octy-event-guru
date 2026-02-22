@@ -49,20 +49,23 @@ def _extract_identifier(node: dict) -> str | None:
     return None
 
 
-def _extract_address(location: object) -> tuple[str | None, str | None]:
+def _extract_location(location: object) -> dict:
+    result: dict = {"name": None, "address": None, "lat": None, "lng": None}
+
     if isinstance(location, str):
-        return location, location
+        result["name"] = location
+        result["address"] = location
+        return result
 
     if not isinstance(location, dict):
-        return None, None
+        return result
 
-    location_name = location.get("name") if isinstance(location.get("name"), str) else None
+    result["name"] = location.get("name") if isinstance(location.get("name"), str) else None
+
     address = location.get("address")
-
     if isinstance(address, str):
-        return location_name, address
-
-    if isinstance(address, dict):
+        result["address"] = address
+    elif isinstance(address, dict):
         address_parts = [
             address.get("streetAddress"),
             address.get("addressLocality"),
@@ -70,10 +73,25 @@ def _extract_address(location: object) -> tuple[str | None, str | None]:
             address.get("postalCode"),
             address.get("addressCountry"),
         ]
-        compact_address = ", ".join(part.strip() for part in address_parts if isinstance(part, str) and part.strip())
-        return location_name, compact_address or None
+        result["address"] = ", ".join(
+            part.strip() for part in address_parts if isinstance(part, str) and part.strip()
+        ) or None
 
-    return location_name, None
+    geo = location.get("geo")
+    if isinstance(geo, dict):
+        result["lat"] = _safe_float(geo.get("latitude"))
+        result["lng"] = _safe_float(geo.get("longitude"))
+
+    return result
+
+
+def _safe_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def parse_jsonld_events(raw_page: RawPage) -> list[ExtractedEvent]:
@@ -95,7 +113,7 @@ def parse_jsonld_events(raw_page: RawPage) -> list[ExtractedEvent]:
             if not _type_contains_event(node.get("@type")):
                 continue
 
-            location_name, location_address = _extract_address(node.get("location"))
+            loc = _extract_location(node.get("location"))
             source_url = node.get("url") if isinstance(node.get("url"), str) else raw_page.url
             canonical_id = _extract_identifier(node)
 
@@ -109,8 +127,10 @@ def parse_jsonld_events(raw_page: RawPage) -> list[ExtractedEvent]:
                     description=node.get("description") if isinstance(node.get("description"), str) else None,
                     start_time_text=node.get("startDate") if isinstance(node.get("startDate"), str) else None,
                     end_time_text=node.get("endDate") if isinstance(node.get("endDate"), str) else None,
-                    location_name=location_name,
-                    location_address=location_address,
+                    location_name=loc["name"],
+                    location_address=loc["address"],
+                    location_lat=loc["lat"],
+                    location_lng=loc["lng"],
                     canonical_id=canonical_id,
                 )
             )

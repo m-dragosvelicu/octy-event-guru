@@ -45,6 +45,32 @@ class SourceFetcher:
         response.raise_for_status()
         return response
 
+    def fetch_url(self, url: str, *, area_id: str = "unknown") -> RawPage | None:
+        parsed = urlparse(url)
+        provider = (parsed.hostname or "unknown").replace("www.", "")
+
+        try:
+            response = self._fetch(url)
+        except requests.RequestException:
+            logger.info("Failed to fetch", extra={"url": url})
+            return None
+
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "html" not in content_type:
+            return None
+
+        html = response.text.strip()
+        if len(html) < 64:
+            return None
+
+        return RawPage(
+            area_id=area_id,
+            provider=provider,
+            sport_hint=None,
+            url=response.url,
+            html=html,
+        )
+
     def fetch_source(self, source: SourceConfig, max_pages: int | None = None) -> list[RawPage]:
         pages: list[RawPage] = []
 

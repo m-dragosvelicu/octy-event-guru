@@ -91,6 +91,8 @@ def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> Normal
         location_name=location_name or location_text,
         location_address=location_address,
         location_text=location_text,
+        location_lat=event.location_lat,
+        location_lng=event.location_lng,
         canonical_id=_clean_text(event.canonical_id),
         timezone=timezone_name if timezone_name != "UTC" else None,
         start_time_local=start_time_local,
