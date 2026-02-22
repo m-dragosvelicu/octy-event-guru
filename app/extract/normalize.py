@@ -1,6 +1,6 @@
 import html
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 
 import dateparser
 
@@ -16,7 +16,7 @@ def _clean_text(value: str | None) -> str | None:
     return compact or None
 
 
-def _parse_datetime(value: str | None, timezone_name: str) -> object | None:
+def _parse_datetime(value: str | None, timezone_name: str) -> datetime | None:
     if not value:
         return None
 
@@ -38,6 +38,25 @@ def _parse_datetime(value: str | None, timezone_name: str) -> object | None:
     return dt.astimezone(UTC)
 
 
+def _to_local_iso(value: str | None, timezone_name: str) -> str | None:
+    if not value:
+        return None
+
+    dt = dateparser.parse(
+        value,
+        settings={
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": timezone_name,
+            "TO_TIMEZONE": timezone_name,
+            "PREFER_DATES_FROM": "future",
+        },
+    )
+    if dt is None:
+        return None
+
+    return dt.isoformat()
+
+
 def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> NormalizedEvent | None:
     title = _clean_text(event.title)
     location_name = _clean_text(event.location_name)
@@ -57,6 +76,9 @@ def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> Normal
     if end_time is not None and end_time <= start_time:
         end_time = None
 
+    start_time_local = _to_local_iso(event.start_time_text, timezone_name)
+    end_time_local = _to_local_iso(event.end_time_text, timezone_name) if end_time else None
+
     return NormalizedEvent(
         area_id=event.area_id,
         provider=event.provider,
@@ -70,6 +92,9 @@ def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> Normal
         location_address=location_address,
         location_text=location_text,
         canonical_id=_clean_text(event.canonical_id),
+        timezone=timezone_name if timezone_name != "UTC" else None,
+        start_time_local=start_time_local,
+        end_time_local=end_time_local,
     )
 
 

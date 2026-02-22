@@ -51,18 +51,18 @@ class SupabaseWriter:
             if event.start_time <= datetime.now(timezone.utc):
                 continue
 
-            activity_id = self._resolve_activity_id(event.sport_hint)
-            if activity_id is None:
-                logger.info("Skipping event because sport hint could not be mapped")
+            if event.location_lat is None or event.location_lng is None:
+                logger.info(
+                    "Skipping event: no coordinates",
+                    extra={"title": event.title, "provider": event.provider},
+                )
                 continue
 
-            if event.location_lat is None or event.location_lng is None:
-                continue
+            activity_id = self._resolve_activity_id(event.sport_hint)
 
             payload = {
                 "title": event.title,
                 "description": event.description,
-                "activity_id": activity_id,
                 "location_name": event.location_name,
                 "location_lat": event.location_lat,
                 "location_lng": event.location_lng,
@@ -77,7 +77,13 @@ class SupabaseWriter:
                 "external_event_id": event.external_event_id,
                 "external_source_url": event.source_url,
                 "external_confidence": event.external_confidence,
+                "timezone": event.timezone,
+                "start_time_local": event.start_time_local,
+                "end_time_local": event.end_time_local,
             }
+
+            if activity_id is not None:
+                payload["activity_id"] = activity_id
 
             if dry_run:
                 inserted += 1
@@ -87,7 +93,11 @@ class SupabaseWriter:
                 self.client.table("events").insert(payload).execute()
                 inserted += 1
             except Exception:
-                logger.warning("Supabase insert failed for event", exc_info=True)
+                logger.warning(
+                    "Supabase insert failed for event",
+                    extra={"title": event.title, "provider": event.provider},
+                    exc_info=True,
+                )
 
         return inserted
 

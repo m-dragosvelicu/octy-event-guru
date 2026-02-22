@@ -27,6 +27,8 @@ class IngestSummaryResponse(BaseModel):
     inserted: int
     skipped_duplicates: int
     rejected_low_precision: int
+    dropped_no_coords: int = 0
+    with_source_coords: int = 0
 
 
 class IngestHealthResponse(BaseModel):
