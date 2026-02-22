@@ -20,14 +20,9 @@ def build_external_event_id(event: NormalizedEvent) -> str:
         cleaned = re.sub(r"[^a-z0-9._:/-]", "", cleaned)
         return cleaned[:160]
 
-    hash_source = "|".join(
-        [
-            event.source_url.strip().lower(),
-            event.title.strip().lower(),
-            event.start_time.isoformat(),
-        ]
-    )
-    return hashlib.sha256(hash_source.encode("utf-8")).hexdigest()
+    # Use content-based fingerprint (title + date + venue) so that the same
+    # event discovered via different URLs gets the same external_event_id.
+    return _build_fingerprint(event)
 
 
 def _build_fingerprint(event: NormalizedEvent) -> str:
