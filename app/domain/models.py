@@ -12,6 +12,7 @@ class AreaConfig(BaseModel):
     horizon_days: int = 7
     default_activity_slug: str | None = None
     search_queries: list[str] = Field(default_factory=list)
+    per_domain_cap: int | None = None
 
 
 class SourceConfig(BaseModel):
@@ -70,15 +71,16 @@ class NormalizedEvent(BaseModel):
     timezone: str | None = None
     start_time_local: str | None = None
     end_time_local: str | None = None
+    date_only: bool = False
 
 
 class IngestSummary(BaseModel):
     fetched: int = 0
     parsed: int = 0
-    geocoded: int = 0
     accepted: int = 0
     inserted: int = 0
     skipped_duplicates: int = 0
-    rejected_low_precision: int = 0
     dropped_no_coords: int = 0
     with_source_coords: int = 0
+    date_only_count: int = 0
+    domain_stats: dict[str, int] = Field(default_factory=dict)

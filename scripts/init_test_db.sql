@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS events (
     timezone                TEXT,
     start_time_local        TEXT,
     end_time_local          TEXT,
+    date_only               BOOLEAN DEFAULT FALSE,
     h3_index                VARCHAR(15),
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()

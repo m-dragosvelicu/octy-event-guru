@@ -1,12 +1,15 @@
 import html
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import dateparser
 
 from ..domain.models import ExtractedEvent, NormalizedEvent
 
 _SPACE_RE = re.compile(r"\s+")
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_HAS_TIME_RE = re.compile(r"T\d{2}:\d{2}")
 
 
 def _clean_text(value: str | None) -> str | None:
@@ -16,9 +19,44 @@ def _clean_text(value: str | None) -> str | None:
     return compact or None
 
 
+def _is_date_only(value: str) -> bool:
+    stripped = value.strip()
+    if _DATE_ONLY_RE.match(stripped):
+        return True
+    if not _HAS_TIME_RE.search(stripped):
+        if re.match(r"^\d{4}-\d{2}-\d{2}\s*$", stripped):
+            return True
+    return False
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    stripped = value.strip()
+    if stripped.endswith("Z"):
+        stripped = stripped[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(stripped)
+        if dt.tzinfo is None:
+            return None
+        return dt.astimezone(UTC)
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_datetime(value: str | None, timezone_name: str) -> datetime | None:
     if not value:
         return None
+
+    iso_result = _parse_iso_datetime(value)
+    if iso_result is not None:
+        return iso_result
+
+    if _is_date_only(value):
+        try:
+            tz = ZoneInfo(timezone_name)
+            naive = datetime.fromisoformat(value.strip() + "T00:00:00")
+            return naive.replace(tzinfo=tz).astimezone(UTC)
+        except Exception:
+            pass
 
     dt = dateparser.parse(
         value,
@@ -41,6 +79,21 @@ def _parse_datetime(value: str | None, timezone_name: str) -> datetime | None:
 def _to_local_iso(value: str | None, timezone_name: str) -> str | None:
     if not value:
         return None
+
+    stripped = value.strip()
+    if stripped.endswith("Z"):
+        stripped = stripped[:-1] + "+00:00"
+
+    try:
+        dt = datetime.fromisoformat(stripped)
+        if dt.tzinfo is not None:
+            tz = ZoneInfo(timezone_name)
+            return dt.astimezone(tz).isoformat()
+    except (ValueError, TypeError):
+        pass
+
+    if _is_date_only(value):
+        return value.strip()
 
     dt = dateparser.parse(
         value,
@@ -72,6 +125,8 @@ def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> Normal
     if start_time is None:
         return None
 
+    date_only = _is_date_only(event.start_time_text) if event.start_time_text else False
+
     end_time = _parse_datetime(event.end_time_text, timezone_name)
     if end_time is not None and end_time <= start_time:
         end_time = None
@@ -97,6 +152,7 @@ def normalize_event(event: ExtractedEvent, timezone_name: str = "UTC") -> Normal
         timezone=timezone_name if timezone_name != "UTC" else None,
         start_time_local=start_time_local,
         end_time_local=end_time_local,
+        date_only=date_only,
     )
 
 

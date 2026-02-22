@@ -5,6 +5,7 @@
   timezone: Europe/Bucharest
   horizon_days: 7
   default_activity_slug: events
+  per_domain_cap: 50
   search_queries:
     - "events in Bucharest this week"
     - "evenimente Bucuresti 2026"

@@ -58,6 +58,13 @@ class SupabaseWriter:
                 )
                 continue
 
+            if not event.provider or not event.external_event_id or not event.source_url:
+                logger.info(
+                    "Skipping event: missing provenance",
+                    extra={"title": event.title},
+                )
+                continue
+
             activity_id = self._resolve_activity_id(event.sport_hint)
 
             payload = {
@@ -72,7 +79,7 @@ class SupabaseWriter:
                 "presigned_count": 0,
                 "skill_level": "beginner",
                 "status": "upcoming",
-                "host_id": self.settings.event_guru_host_user_id,
+                "host_id": self.settings.event_guru_host_user_id or None,
                 "external_provider": event.provider,
                 "external_event_id": event.external_event_id,
                 "external_source_url": event.source_url,
@@ -80,6 +87,7 @@ class SupabaseWriter:
                 "timezone": event.timezone,
                 "start_time_local": event.start_time_local,
                 "end_time_local": event.end_time_local,
+                "date_only": event.date_only,
             }
 
             if activity_id is not None:
