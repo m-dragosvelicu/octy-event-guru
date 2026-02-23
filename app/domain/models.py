@@ -84,3 +84,5 @@ class IngestSummary(BaseModel):
     with_source_coords: int = 0
     date_only_count: int = 0
     domain_stats: dict[str, int] = Field(default_factory=dict)
+    candidate_ids: list[str] = Field(default_factory=list)
+    inserted_ids: list[str] = Field(default_factory=list)

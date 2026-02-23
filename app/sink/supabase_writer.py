@@ -44,8 +44,9 @@ class SupabaseWriter:
 
         return existing
 
-    def insert_events(self, events: list[NormalizedEvent], *, dry_run: bool = False) -> int:
+    def insert_events(self, events: list[NormalizedEvent], *, dry_run: bool = False) -> tuple[int, list[str]]:
         inserted = 0
+        inserted_ids: list[str] = []
 
         for event in events:
             if event.start_time <= datetime.now(timezone.utc):
@@ -95,11 +96,13 @@ class SupabaseWriter:
 
             if dry_run:
                 inserted += 1
+                inserted_ids.append(event.external_event_id)
                 continue
 
             try:
                 self.client.table("events").insert(payload).execute()
                 inserted += 1
+                inserted_ids.append(event.external_event_id)
             except Exception:
                 logger.warning(
                     "Supabase insert failed for event",
@@ -107,7 +110,7 @@ class SupabaseWriter:
                     exc_info=True,
                 )
 
-        return inserted
+        return inserted, inserted_ids
 
     def _resolve_activity_id(self, sport_hint: str | None) -> str | None:
         if not sport_hint:

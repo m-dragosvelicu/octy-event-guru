@@ -129,3 +129,39 @@ def test_location_point_trigger_applies_on_insert(supabase_client, clean_tables)
     )
     titles = {r["title"] for r in rows}
     assert "Trigger Test" in titles
+
+
+def test_date_only_round_trips_through_db(supabase_client, clean_tables):
+    """Insert an event with date_only=True, query via RPC, assert it comes back."""
+    payload = {
+        "title": "All-Day Festival",
+        "location_name": "Parcul Tineretului",
+        "location_lat": BUCHAREST_LAT,
+        "location_lng": BUCHAREST_LNG,
+        "start_time": _future(5).isoformat(),
+        "status": "upcoming",
+        "external_provider": "test",
+        "external_event_id": "test-date-only-roundtrip",
+        "date_only": True,
+    }
+    supabase_client.table("events").insert(payload).execute()
+
+    start = datetime.now(timezone.utc)
+    end = _future(14)
+    rows = (
+        supabase_client.rpc(
+            "find_events_nearby",
+            {
+                "p_lat": BUCHAREST_LAT,
+                "p_lng": BUCHAREST_LNG,
+                "p_radius_meters": 1000,
+                "p_start_date": start.isoformat(),
+                "p_end_date": end.isoformat(),
+            },
+        ).execute().data
+        or []
+    )
+
+    matched = [r for r in rows if r["title"] == "All-Day Festival"]
+    assert len(matched) == 1
+    assert matched[0]["date_only"] is True

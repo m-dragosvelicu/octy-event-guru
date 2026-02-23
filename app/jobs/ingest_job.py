@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.config import get_settings, load_area_configs
-from ..domain.models import IngestSummary, NormalizedEvent, RawPage
-from ..extract.html_fallback import parse_html_events
-from ..extract.jsonld import parse_jsonld_events
-from ..extract.normalize import normalize_events
-from ..sink.dedupe import attach_external_event_ids, dedupe_in_batch
+from ..domain.models import IngestSummary, RawPage
 from ..sources.base import SourceFetcher
 from ..sources.connectors.brave_search import search_event_urls
 
@@ -24,6 +19,13 @@ def run_ingest_job(
     dry_run: bool = False,
     max_events: int | None = None,
 ) -> dict:
+    """Full ingest: Brave Search -> fetch HTML -> extract -> dedupe -> insert.
+
+    Pipeline invariants:
+    - No Mapbox geocoding: events without source coordinates are dropped.
+    - Coords and provenance gates are enforced at insert time.
+    - Deduplication: in-batch fingerprint + DB external_event_id lookup.
+    """
     settings = get_settings()
     target_area_id = area_id or settings.default_area_id
 
@@ -61,97 +63,12 @@ def run_ingest_job(
         if page is not None:
             pages.append(page)
 
-    summary.fetched = len(pages)
+    # --- Steps 3-9: Extract -> Normalize -> Dedupe -> Insert ---
+    from .ingest_pipeline import run_pipeline_from_pages
 
-    # --- Step 3: Extract events from pages ---
-    from ..sources.adapters import get_selectors
-
-    extracted_events = []
-    for page in pages:
-        jsonld_events = parse_jsonld_events(page)
-        if jsonld_events:
-            parsed = jsonld_events
-        else:
-            selectors = get_selectors(page.provider)
-            parsed = parse_html_events(page, selectors)
-
-        summary.parsed += len(parsed)
-        extracted_events.extend(parsed)
-
-    # --- Step 4: Normalize ---
-    normalized = normalize_events(extracted_events, timezone_name=area.timezone)
-
-    # --- Step 5: Drop events without source coordinates ---
-    coords_events: list[NormalizedEvent] = []
-    for ev in normalized:
-        if ev.location_lat is not None and ev.location_lng is not None:
-            summary.with_source_coords += 1
-            coords_events.append(ev)
-        else:
-            summary.dropped_no_coords += 1
-
-    # --- Step 6: Track date_only and domain stats ---
-    domain_counter: Counter[str] = Counter()
-    for ev in coords_events:
-        if ev.date_only:
-            summary.date_only_count += 1
-        domain_counter[ev.provider] += 1
-
-    summary.domain_stats = dict(domain_counter.most_common())
-
-    # --- Step 7: Per-domain cap ---
-    if area.per_domain_cap is not None and area.per_domain_cap > 0:
-        capped: list[NormalizedEvent] = []
-        cap_counter: Counter[str] = Counter()
-        for ev in coords_events:
-            if cap_counter[ev.provider] < area.per_domain_cap:
-                capped.append(ev)
-                cap_counter[ev.provider] += 1
-        coords_events = capped
-
-    summary.accepted = len(coords_events)
-
-    # --- Step 8: Dedupe ---
-    attach_external_event_ids(coords_events)
-    unique_events, batch_duplicates = dedupe_in_batch(coords_events)
-    summary.skipped_duplicates += batch_duplicates
-
-    # --- Step 9: DB dedupe + insert ---
-    if settings.supabase_url and settings.supabase_service_role_key:
-        from ..sink.supabase_writer import SupabaseWriter
-
-        writer = SupabaseWriter(settings)
-
-        db_unique_events: list[NormalizedEvent] = []
-        grouped_ids: dict[str, list[str]] = {}
-        for event in unique_events:
-            if not event.external_event_id:
-                continue
-            grouped_ids.setdefault(event.provider, []).append(event.external_event_id)
-
-        existing_ids_by_provider: dict[str, set[str]] = {}
-        if not dry_run:
-            for provider, external_ids in grouped_ids.items():
-                existing_ids_by_provider[provider] = writer.get_existing_external_event_ids(provider, external_ids)
-
-        for event in unique_events:
-            event_id = event.external_event_id
-            if not event_id:
-                continue
-            existing = existing_ids_by_provider.get(event.provider, set())
-            if event_id in existing:
-                summary.skipped_duplicates += 1
-                continue
-            db_unique_events.append(event)
-
-        if max_events is not None:
-            db_unique_events = db_unique_events[:max_events]
-
-        summary.inserted = writer.insert_events(db_unique_events, dry_run=dry_run)
-    else:
-        if max_events is not None:
-            unique_events = unique_events[:max_events]
-        summary.inserted = len(unique_events) if dry_run else 0
+    result = run_pipeline_from_pages(
+        pages, area, settings, dry_run=dry_run, max_events=max_events,
+    )
 
     _write_run_report(
         report_path=settings.ingest_run_report_path,
@@ -160,12 +77,12 @@ def run_ingest_job(
             "area_id": target_area_id,
             "dry_run": dry_run,
             "max_events": max_events,
-            **summary.model_dump(),
+            **result,
         },
     )
 
     logger.info("Ingest job completed", extra={"area_id": target_area_id, "event": "ingest_complete"})
-    return summary.model_dump()
+    return result
 
 
 def _write_run_report(report_path: str, report: dict) -> None:

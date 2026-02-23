@@ -181,6 +181,7 @@ RETURNS TABLE(
     external_confidence NUMERIC,
     activity_id UUID,
     status TEXT,
+    date_only BOOLEAN,
     distance_km DOUBLE PRECISION
 )
 LANGUAGE plpgsql
@@ -205,6 +206,7 @@ BEGIN
         e.external_confidence,
         e.activity_id,
         e.status,
+        e.date_only,
         ST_Distance(
             e.location_point::geography,
             ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography

@@ -31,6 +31,7 @@ class NearbyEvent(BaseModel):
     external_confidence: float | None = None
     activity_id: str | None = None
     status: str | None = None
+    date_only: bool = False
     distance_km: float | None = None
 
 
@@ -113,6 +114,7 @@ def get_nearby_events(
                 external_confidence=row.get("external_confidence"),
                 activity_id=row.get("activity_id"),
                 status=row.get("status"),
+                date_only=row.get("date_only", False),
                 distance_km=row.get("distance_km"),
             )
         )
