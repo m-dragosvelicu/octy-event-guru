@@ -2,7 +2,7 @@ name: Ingest Cron
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 8 * * *"
   workflow_dispatch:
 
 jobs:
@@ -20,3 +20,18 @@ jobs:
             -H "Authorization: Bearer $INGEST_API_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"area_id\": \"$DEFAULT_AREA_ID\", \"dry_run\": false}"
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "ALERT_WEBHOOK_URL not configured, skipping notification"
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -X POST "$ALERT_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"workflow\": \"${{ github.workflow }}\", \"run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+          || echo "Webhook delivery failed (non-fatal)"

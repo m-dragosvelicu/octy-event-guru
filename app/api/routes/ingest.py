@@ -20,13 +20,17 @@ class IngestRunRequest(BaseModel):
 
 
 class IngestSummaryResponse(BaseModel):
-    fetched: int
-    parsed: int
-    geocoded: int
-    accepted: int
-    inserted: int
-    skipped_duplicates: int
-    rejected_low_precision: int
+    fetched: int = 0
+    parsed: int = 0
+    accepted: int = 0
+    inserted: int = 0
+    skipped_duplicates: int = 0
+    dropped_no_coords: int = 0
+    with_source_coords: int = 0
+    date_only_count: int = 0
+    domain_stats: dict[str, int] = Field(default_factory=dict)
+    candidate_ids: list[str] = Field(default_factory=list)
+    inserted_ids: list[str] = Field(default_factory=list)
 
 
 class IngestHealthResponse(BaseModel):

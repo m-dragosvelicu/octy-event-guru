@@ -13,3 +13,8 @@ wheels/
 .env
 .pytest_cache/
 ingest_runs.json
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage.xml

@@ -18,6 +18,11 @@ dependencies = [
     "pyyaml>=6.0.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.4",
@@ -33,3 +38,6 @@ extend-select = ["I"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "integration: tests requiring external services (PostgREST + PostGIS)",
+]

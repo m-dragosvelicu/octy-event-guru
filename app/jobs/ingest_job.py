@@ -2,20 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..core.config import get_settings
-from ..domain.models import IngestSummary, NormalizedEvent
-from ..extract.html_fallback import parse_html_events
-from ..extract.jsonld import parse_jsonld_events
-from ..extract.normalize import normalize_events
-from ..geocode.mapbox_client import MapboxClient
-from ..geocode.scoring import passes_precision_gate, score_geocode
-from ..sink.dedupe import attach_external_event_ids, dedupe_in_batch
-from ..sink.supabase_writer import SupabaseWriter
-from ..sources.adapters import get_selectors
-from ..sources.base import SourceFetcher, load_source_registry
+from ..core.config import get_settings, load_area_configs
+from ..domain.models import IngestSummary, RawPage
+from ..domain.run_diff import compute_run_diff
+from ..observability.health_checks import check_ingest_health
+from ..sources.base import SourceFetcher
+from ..sources.connectors.brave_search import search_event_urls
 
 logger = logging.getLogger(__name__)
 
@@ -25,118 +21,157 @@ def run_ingest_job(
     area_id: str | None = None,
     dry_run: bool = False,
     max_events: int | None = None,
-) -> dict[str, int]:
+) -> dict:
+    """Full ingest: Brave Search -> fetch HTML -> extract -> dedupe -> insert.
+
+    Pipeline invariants:
+    - No Mapbox geocoding: events without source coordinates are dropped.
+    - Coords and provenance gates are enforced at insert time.
+    - Deduplication: in-batch fingerprint + DB external_event_id lookup.
+    """
     settings = get_settings()
     target_area_id = area_id or settings.default_area_id
 
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc)
+
     summary = IngestSummary()
 
-    all_sources = load_source_registry()
-    sources = [source for source in all_sources if source.enabled and source.area_id == target_area_id]
+    area_configs = load_area_configs()
+    area = next((a for a in area_configs if a.area_id == target_area_id), None)
+    if area is None:
+        logger.error("No area config found", extra={"area_id": target_area_id})
+        return summary.model_dump()
 
+    # --- Step 1: Search the web for event pages ---
+    urls = search_event_urls(
+        api_key=settings.brave_search_api_key,
+        queries=area.search_queries,
+        timeout_seconds=settings.requests_timeout_seconds,
+    )
+    if not urls:
+        logger.warning("No URLs found from search", extra={"area_id": target_area_id})
+        return summary.model_dump()
+
+    # --- Step 2: Crawl each URL ---
     fetcher = SourceFetcher(
         timeout_seconds=settings.requests_timeout_seconds,
         user_agent=settings.requests_user_agent,
     )
-    mapbox = MapboxClient(
-        settings.mapbox_access_token,
-        permanent=settings.mapbox_permanent,
-        timeout_seconds=settings.requests_timeout_seconds,
+
+    pages: list[RawPage] = []
+    for url in urls:
+        try:
+            page = fetcher.fetch_url(url, area_id=area.area_id)
+        except Exception:
+            logger.info("Failed to fetch URL", extra={"url": url})
+            continue
+        if page is not None:
+            pages.append(page)
+
+    # --- Steps 3-9: Extract -> Normalize -> Dedupe -> Insert ---
+    from .ingest_pipeline import run_pipeline_from_pages
+
+    result = run_pipeline_from_pages(
+        pages, area, settings, dry_run=dry_run, max_events=max_events,
     )
-    writer = SupabaseWriter(settings)
 
-    extracted_events = []
-    for source in sources:
-        pages = fetcher.fetch_source(source, max_pages=max_events)
-        summary.fetched += len(pages)
+    finished_at = datetime.now(timezone.utc)
+    run_status = "success" if result.get("inserted", 0) > 0 else "empty"
 
-        selectors = get_selectors(source.provider)
-        for page in pages:
-            jsonld_events = parse_jsonld_events(page)
-            if jsonld_events:
-                parsed_events = jsonld_events
-            else:
-                parsed_events = parse_html_events(page, selectors)
+    current_report: dict = {
+        "run_id": run_id,
+        "run_at": started_at.isoformat(),
+        "area_id": target_area_id,
+        "dry_run": dry_run,
+        "max_events": max_events,
+        **result,
+    }
 
-            summary.parsed += len(parsed_events)
-            extracted_events.extend(parsed_events)
-
-    normalized_events = normalize_events(extracted_events)
-
-    accepted_events: list[NormalizedEvent] = []
-    for event in normalized_events:
-        geocode_result = mapbox.geocode(
-            event.location_text,
-            country=settings.mapbox_country_bias,
-            bbox=settings.mapbox_bbox_bias,
-        )
-        if geocode_result is None:
-            summary.rejected_low_precision += 1
-            continue
-
-        summary.geocoded += 1
-
-        score = score_geocode(event.location_text, geocode_result)
-        if not passes_precision_gate(score, threshold=settings.geocode_min_score):
-            summary.rejected_low_precision += 1
-            continue
-
-        event.location_lat = geocode_result.get("lat")
-        event.location_lng = geocode_result.get("lng")
-        event.external_confidence = score
-
-        accepted_events.append(event)
-
-    summary.accepted = len(accepted_events)
-
-    attach_external_event_ids(accepted_events)
-    unique_events, batch_duplicates = dedupe_in_batch(accepted_events)
-    summary.skipped_duplicates += batch_duplicates
-
-    db_unique_events: list[NormalizedEvent] = []
-    grouped_ids: dict[str, list[str]] = {}
-    for event in unique_events:
-        if not event.external_event_id:
-            continue
-        grouped_ids.setdefault(event.provider, []).append(event.external_event_id)
-
-    existing_ids_by_provider: dict[str, set[str]] = {}
-    for provider, external_ids in grouped_ids.items():
-        existing_ids_by_provider[provider] = writer.get_existing_external_event_ids(provider, external_ids)
-
-    for event in unique_events:
-        event_id = event.external_event_id
-        if not event_id:
-            continue
-
-        existing = existing_ids_by_provider.get(event.provider, set())
-        if event_id in existing:
-            summary.skipped_duplicates += 1
-            continue
-
-        db_unique_events.append(event)
-
-    if max_events is not None:
-        db_unique_events = db_unique_events[:max_events]
-
-    summary.inserted = writer.insert_events(db_unique_events, dry_run=dry_run)
-
-    _write_run_report(
+    prev_run = _write_run_report(
         report_path=settings.ingest_run_report_path,
-        report={
-            "run_at": datetime.now(timezone.utc).isoformat(),
-            "area_id": target_area_id,
-            "dry_run": dry_run,
-            "max_events": max_events,
-            **summary.model_dump(),
-        },
+        report=current_report,
     )
+
+    if prev_run is not None:
+        diff = compute_run_diff(
+            r1_candidates=prev_run.get("candidate_ids") or [],
+            r1_inserted=prev_run.get("inserted_ids") or [],
+            r2_candidates=result.get("candidate_ids") or [],
+            r2_inserted=result.get("inserted_ids") or [],
+        )
+        diff_dict = diff.model_dump()
+        leak_count = len(diff.duplicate_leaks_in_run2)
+        new_disc_count = len(diff.new_discovery_in_run2)
+        log_extra = {
+            "leak_count": leak_count,
+            "new_discovery_count": new_disc_count,
+            "area_id": target_area_id,
+            "event": "run_diff",
+        }
+        if leak_count > 0:
+            logger.warning("Run diff: duplicate leaks detected", extra=log_extra)
+        else:
+            logger.info("Run diff computed", extra=log_extra)
+        _patch_last_run_report(
+            report_path=settings.ingest_run_report_path,
+            extra={"run_diff": diff_dict},
+        )
+        current_report["run_diff"] = diff_dict
+
+    # --- Post-run: persist run metadata to DB and evaluate health alerts ---
+    if settings.supabase_url and settings.supabase_service_role_key:
+        from ..sink.supabase_writer import SupabaseWriter
+
+        writer = SupabaseWriter(settings)
+
+        writer.persist_ingest_run(
+            run_id=run_id,
+            area_id=target_area_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            status=run_status,
+            summary=result,
+        )
+
+        alerts = check_ingest_health(result)
+        if alerts:
+            for alert in alerts:
+                alert["area_id"] = target_area_id
+            logger.warning(
+                "Health check alerts detected",
+                extra={"run_id": run_id, "alert_count": len(alerts)},
+            )
+            for alert in alerts:
+                logger.warning(
+                    "Alert [%s] %s: %s",
+                    alert["severity"],
+                    alert["condition"],
+                    alert["message"],
+                )
+            writer.insert_alerts(alerts)
+        else:
+            logger.info("Health checks passed", extra={"run_id": run_id})
+
+        _write_source_scorecards(writer, target_area_id, result, alerts)
+    else:
+        # No DB configured -- still evaluate and log alerts locally
+        alerts = check_ingest_health(result)
+        if alerts:
+            for alert in alerts:
+                logger.warning(
+                    "Alert [%s] %s: %s",
+                    alert["severity"],
+                    alert["condition"],
+                    alert["message"],
+                )
 
     logger.info("Ingest job completed", extra={"area_id": target_area_id, "event": "ingest_complete"})
-    return summary.model_dump()
+    return result
 
 
-def _write_run_report(report_path: str, report: dict) -> None:
+def _write_run_report(report_path: str, report: dict) -> dict | None:
+    """Append report to the JSON run log. Returns the previous run entry, or None if first run."""
     path = Path(report_path)
 
     existing_reports: list[dict]
@@ -150,5 +185,67 @@ def _write_run_report(report_path: str, report: dict) -> None:
     else:
         existing_reports = []
 
+    prev_run = existing_reports[-1] if existing_reports else None
     existing_reports.append(report)
     path.write_text(json.dumps(existing_reports, indent=2), encoding="utf-8")
+    return prev_run
+
+
+def _write_source_scorecards(
+    writer,
+    area_id: str,
+    result: dict,
+    alerts: list[dict],
+) -> None:
+    """Derive per-provider health status and upsert source_scorecards rows."""
+    domain_stats: dict[str, int] = result.get("domain_stats", {})
+    if not domain_stats:
+        return
+
+    alert_severities = [a["severity"] for a in alerts]
+    has_critical = "critical" in alert_severities
+    has_warning = "warning" in alert_severities
+
+    total_accepted = result.get("accepted", 0)
+
+    for provider, count in domain_stats.items():
+        share_pct = round(count / total_accepted * 100, 2) if total_accepted > 0 else 0.0
+
+        if has_critical:
+            health = "critical"
+        elif has_warning:
+            health = "warning"
+        else:
+            health = "healthy"
+
+        metrics = {
+            "fetched": result.get("fetched", 0),
+            "parsed": result.get("parsed", 0),
+            "accepted": total_accepted,
+            "inserted": result.get("inserted", 0),
+            "dropped_no_coords": result.get("dropped_no_coords", 0),
+            "provider_event_count": count,
+            "provider_share_pct": share_pct,
+        }
+
+        writer.upsert_source_scorecard(
+            provider=provider,
+            area_id=area_id,
+            health_status=health,
+            metrics=metrics,
+        )
+
+
+def _patch_last_run_report(report_path: str, extra: dict) -> None:
+    """Merge extra fields into the last entry of the JSON run log."""
+    path = Path(report_path)
+    if not path.exists():
+        return
+    try:
+        reports = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(reports, list) or not reports:
+            return
+    except json.JSONDecodeError:
+        return
+    reports[-1].update(extra)
+    path.write_text(json.dumps(reports, indent=2), encoding="utf-8")
