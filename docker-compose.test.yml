@@ -28,11 +28,6 @@ services:
       PGRST_JWT_SECRET: super-secret-jwt-key-for-testing-only-do-not-use-in-prod
       PGRST_DB_MAX_ROWS: 1000
       PGRST_OPENAPI_MODE: ignore-privileges
-    healthcheck:
-      test: ["CMD-SHELL", "postgrest --help >/dev/null 2>&1 || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   nginx-proxy:
     image: nginx:1.25-alpine
