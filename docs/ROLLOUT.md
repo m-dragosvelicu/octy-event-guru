@@ -19,8 +19,6 @@ Confirm all of the following before starting.
 
 ### API keys
 - [ ] `BRAVE_SEARCH_API_KEY` obtained from https://brave.com/search/api/
-- [ ] `MAPBOX_ACCESS_TOKEN` obtained from https://account.mapbox.com/
-  (required for geocoding fallback; scope: `styles:read`, `geocoding:read`)
 
 ### Deployment target
 - [ ] Docker-capable host (VM, container service, Railway, Fly.io, etc.)
@@ -93,11 +91,11 @@ Required variables:
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Full DB access; keep secret |
 | `EVENT_GURU_HOST_USER_ID` | Yes | UUID of bot user in Supabase Auth |
 | `INGEST_API_TOKEN` | Yes | Bearer token for POST /v1/ingest/run |
-| `MAPBOX_ACCESS_TOKEN` | Yes | Geocoding fallback |
 | `DEFAULT_AREA_ID` | Yes | e.g. `bucharest` |
-| `MAPBOX_PERMANENT` | Recommended | Set `true` to store coords permanently |
-| `MAPBOX_COUNTRY_BIAS` | Optional | e.g. `ro` |
-| `MAPBOX_BBOX_BIAS` | Optional | Bounding box hint for geocoding |
+| `MAPBOX_ACCESS_TOKEN` | No | Unused -- geocoding fallback is disabled; events without source coords are dropped |
+| `MAPBOX_PERMANENT` | No | Unused |
+| `MAPBOX_COUNTRY_BIAS` | No | Unused |
+| `MAPBOX_BBOX_BIAS` | No | Unused |
 | `INGEST_RUN_REPORT_PATH` | Optional | Defaults to `ingest_runs.json` |
 
 Build and start the container:
