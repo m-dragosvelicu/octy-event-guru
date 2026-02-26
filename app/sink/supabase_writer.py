@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -111,6 +112,58 @@ class SupabaseWriter:
                 )
 
         return inserted, inserted_ids
+
+    def persist_ingest_run(
+        self,
+        run_id: str,
+        area_id: str,
+        started_at: datetime,
+        finished_at: datetime,
+        status: str,
+        summary: dict,
+    ) -> None:
+        """Upsert a row into the ingest_runs table."""
+        duration = (finished_at - started_at).total_seconds()
+
+        # Extract source_breakdown from domain_stats if present
+        source_breakdown = summary.get("domain_stats", {})
+
+        # Build a clean top-level summary without large lists
+        summary_payload = {
+            k: v
+            for k, v in summary.items()
+            if k not in ("candidate_ids", "inserted_ids", "domain_stats")
+        }
+
+        payload = {
+            "run_id": run_id,
+            "area_id": area_id,
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_seconds": duration,
+            "status": status,
+            "summary": json.dumps(summary_payload),
+            "errors": json.dumps([]),
+            "source_breakdown": json.dumps(source_breakdown),
+        }
+
+        try:
+            self.client.table("ingest_runs").upsert(payload).execute()
+            logger.info("Persisted ingest run", extra={"run_id": run_id, "status": status})
+        except Exception:
+            logger.warning("Failed to persist ingest run to DB", extra={"run_id": run_id}, exc_info=True)
+
+    def insert_alerts(self, alerts: list[dict]) -> None:
+        """Insert alert rows into the alerts table. Ignores individual failures."""
+        for alert in alerts:
+            try:
+                self.client.table("alerts").insert(alert).execute()
+            except Exception:
+                logger.warning(
+                    "Failed to insert alert",
+                    extra={"condition": alert.get("condition")},
+                    exc_info=True,
+                )
 
     def _resolve_activity_id(self, sport_hint: str | None) -> str | None:
         if not sport_hint:

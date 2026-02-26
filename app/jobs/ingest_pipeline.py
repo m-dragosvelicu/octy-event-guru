@@ -86,6 +86,26 @@ def run_pipeline_from_pages(
 
     summary.accepted = len(coords_events)
 
+    # --- Step 7b: Provider diversity metrics ---
+    accepted_provider_counter: Counter[str] = Counter(ev.provider for ev in coords_events)
+    summary.provider_count = len(accepted_provider_counter)
+    if summary.accepted > 0:
+        top_count = accepted_provider_counter.most_common(1)[0][1]
+        summary.top_provider_pct = round(top_count / summary.accepted * 100, 2)
+    else:
+        summary.top_provider_pct = 0.0
+
+    if summary.top_provider_pct > area.provider_diversity_warn_pct:
+        top_provider = accepted_provider_counter.most_common(1)[0][0]
+        logger.warning(
+            "Provider diversity warning for area %s: %s supplied %.1f%% of accepted events"
+            " (threshold %d%%). Consider broadening sources.",
+            area.area_id,
+            top_provider,
+            summary.top_provider_pct,
+            area.provider_diversity_warn_pct,
+        )
+
     # --- Step 8: Dedupe ---
     attach_external_event_ids(coords_events)
     summary.candidate_ids = [

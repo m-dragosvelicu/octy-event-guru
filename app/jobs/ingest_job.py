@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ..core.config import get_settings, load_area_configs
 from ..domain.models import IngestSummary, RawPage
+from ..domain.run_diff import compute_run_diff
+from ..observability.health_checks import check_ingest_health
 from ..sources.base import SourceFetcher
 from ..sources.connectors.brave_search import search_event_urls
 
@@ -28,6 +31,9 @@ def run_ingest_job(
     """
     settings = get_settings()
     target_area_id = area_id or settings.default_area_id
+
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc)
 
     summary = IngestSummary()
 
@@ -70,22 +76,100 @@ def run_ingest_job(
         pages, area, settings, dry_run=dry_run, max_events=max_events,
     )
 
-    _write_run_report(
+    finished_at = datetime.now(timezone.utc)
+    run_status = "success" if result.get("inserted", 0) > 0 else "empty"
+
+    current_report: dict = {
+        "run_id": run_id,
+        "run_at": started_at.isoformat(),
+        "area_id": target_area_id,
+        "dry_run": dry_run,
+        "max_events": max_events,
+        **result,
+    }
+
+    prev_run = _write_run_report(
         report_path=settings.ingest_run_report_path,
-        report={
-            "run_at": datetime.now(timezone.utc).isoformat(),
-            "area_id": target_area_id,
-            "dry_run": dry_run,
-            "max_events": max_events,
-            **result,
-        },
+        report=current_report,
     )
+
+    if prev_run is not None:
+        diff = compute_run_diff(
+            r1_candidates=prev_run.get("candidate_ids") or [],
+            r1_inserted=prev_run.get("inserted_ids") or [],
+            r2_candidates=result.get("candidate_ids") or [],
+            r2_inserted=result.get("inserted_ids") or [],
+        )
+        diff_dict = diff.model_dump()
+        leak_count = len(diff.duplicate_leaks_in_run2)
+        new_disc_count = len(diff.new_discovery_in_run2)
+        log_extra = {
+            "leak_count": leak_count,
+            "new_discovery_count": new_disc_count,
+            "area_id": target_area_id,
+            "event": "run_diff",
+        }
+        if leak_count > 0:
+            logger.warning("Run diff: duplicate leaks detected", extra=log_extra)
+        else:
+            logger.info("Run diff computed", extra=log_extra)
+        _patch_last_run_report(
+            report_path=settings.ingest_run_report_path,
+            extra={"run_diff": diff_dict},
+        )
+        current_report["run_diff"] = diff_dict
+
+    # --- Post-run: persist run metadata to DB and evaluate health alerts ---
+    if settings.supabase_url and settings.supabase_service_role_key:
+        from ..sink.supabase_writer import SupabaseWriter
+
+        writer = SupabaseWriter(settings)
+
+        writer.persist_ingest_run(
+            run_id=run_id,
+            area_id=target_area_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            status=run_status,
+            summary=result,
+        )
+
+        alerts = check_ingest_health(result)
+        if alerts:
+            for alert in alerts:
+                alert["area_id"] = target_area_id
+            logger.warning(
+                "Health check alerts detected",
+                extra={"run_id": run_id, "alert_count": len(alerts)},
+            )
+            for alert in alerts:
+                logger.warning(
+                    "Alert [%s] %s: %s",
+                    alert["severity"],
+                    alert["condition"],
+                    alert["message"],
+                )
+            writer.insert_alerts(alerts)
+        else:
+            logger.info("Health checks passed", extra={"run_id": run_id})
+    else:
+        # No DB configured -- still evaluate and log alerts locally
+        alerts = check_ingest_health(result)
+        if alerts:
+            for alert in alerts:
+                logger.warning(
+                    "Alert [%s] %s: %s",
+                    alert["severity"],
+                    alert["condition"],
+                    alert["message"],
+                )
 
     logger.info("Ingest job completed", extra={"area_id": target_area_id, "event": "ingest_complete"})
     return result
 
 
-def _write_run_report(report_path: str, report: dict) -> None:
+def _write_run_report(report_path: str, report: dict) -> dict | None:
+    """Append report to the JSON run log. Returns the previous run entry, or None if first run."""
     path = Path(report_path)
 
     existing_reports: list[dict]
@@ -99,5 +183,22 @@ def _write_run_report(report_path: str, report: dict) -> None:
     else:
         existing_reports = []
 
+    prev_run = existing_reports[-1] if existing_reports else None
     existing_reports.append(report)
     path.write_text(json.dumps(existing_reports, indent=2), encoding="utf-8")
+    return prev_run
+
+
+def _patch_last_run_report(report_path: str, extra: dict) -> None:
+    """Merge extra fields into the last entry of the JSON run log."""
+    path = Path(report_path)
+    if not path.exists():
+        return
+    try:
+        reports = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(reports, list) or not reports:
+            return
+    except json.JSONDecodeError:
+        return
+    reports[-1].update(extra)
+    path.write_text(json.dumps(reports, indent=2), encoding="utf-8")

@@ -165,3 +165,38 @@ def test_date_only_round_trips_through_db(supabase_client, clean_tables):
     matched = [r for r in rows if r["title"] == "All-Day Festival"]
     assert len(matched) == 1
     assert matched[0]["date_only"] is True
+
+
+def test_date_only_present_in_api_response(supabase_client, clean_tables, test_client):
+    """date_only=True inserted via DB must surface in the /v1/events/nearby JSON response."""
+    payload = {
+        "title": "All-Day API Festival",
+        "location_name": "Parcul Tineretului",
+        "location_lat": BUCHAREST_LAT,
+        "location_lng": BUCHAREST_LNG,
+        "start_time": _future(5).isoformat(),
+        "status": "upcoming",
+        "external_provider": "test",
+        "external_event_id": "test-date-only-api",
+        "date_only": True,
+    }
+    supabase_client.table("events").insert(payload).execute()
+
+    response = test_client.get(
+        "/v1/events/nearby",
+        params={
+            "lat": BUCHAREST_LAT,
+            "lng": BUCHAREST_LNG,
+            "radius_km": 1,
+            "days": 14,
+            "limit": 50,
+        },
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    matched = [e for e in body["events"] if e["title"] == "All-Day API Festival"]
+    assert len(matched) == 1, f"Expected 1 matching event, got {len(matched)}: {body['events']}"
+    assert matched[0]["date_only"] is True, (
+        f"Expected date_only=True in API response, got: {matched[0]}"
+    )

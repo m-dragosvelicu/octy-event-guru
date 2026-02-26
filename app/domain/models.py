@@ -13,6 +13,7 @@ class AreaConfig(BaseModel):
     default_activity_slug: str | None = None
     search_queries: list[str] = Field(default_factory=list)
     per_domain_cap: int | None = None
+    provider_diversity_warn_pct: int = 80
 
 
 class SourceConfig(BaseModel):
@@ -84,5 +85,7 @@ class IngestSummary(BaseModel):
     with_source_coords: int = 0
     date_only_count: int = 0
     domain_stats: dict[str, int] = Field(default_factory=dict)
+    provider_count: int = 0
+    top_provider_pct: float = 0.0
     candidate_ids: list[str] = Field(default_factory=list)
     inserted_ids: list[str] = Field(default_factory=list)
