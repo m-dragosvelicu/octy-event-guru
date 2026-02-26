@@ -33,6 +33,7 @@ The following secrets must be set under Settings > Secrets and variables > Actio
 | `INGEST_ENDPOINT` | Public base URL of the deployed service, e.g. `https://api.example.com` |
 | `INGEST_API_TOKEN` | Shared secret token; must match `INGEST_API_TOKEN` env var in the container |
 | `DEFAULT_AREA_ID` | Area slug to ingest, e.g. `bucharest` |
+| `ALERT_WEBHOOK_URL` | (Optional) Webhook URL for cron failure notifications. Receives JSON with `workflow`, `run_url`, `timestamp`. If not set, failures are silent beyond GitHub's default email. |
 
 ---
 
@@ -156,8 +157,8 @@ Steps:
 3. Inspect the run log and confirm the curl exits 0 (HTTP 200 from the service)
 4. The scheduled cron (`0 * * * *`) will fire automatically from that point on
 
-Note: the workflow does not currently send a notification on failure beyond the
-default GitHub Actions email. See section 6 for alerting options.
+Note: the workflow sends a webhook notification on failure if `ALERT_WEBHOOK_URL`
+is configured. If not set, failures are silent beyond GitHub's default email.
 
 ---
 
@@ -172,15 +173,14 @@ and what is missing.
   and `source_breakdown` columns - query this for post-hoc diagnosis
 - `alerts` table is schema-ready for application-level alerts but no alert
   dispatch mechanism is wired up yet
-- `source_scorecards` table is schema-ready but not currently populated by the
-  pipeline
+- `source_scorecards` table is populated per provider+area on each ingest run
+  with health status and metrics (upserted via unique index)
 
 ### Minimum viable monitoring (manual setup required)
 - **Uptime check**: configure an external ping (UptimeRobot free tier, Better
   Uptime, or equivalent) against `GET /health` with a 2-minute interval
-- **Cron failure notification**: in the GitHub Actions workflow, add a
-  `on: workflow_run` notification step or enable Slack/email notifications
-  for failed runs
+- **Cron failure notification**: configured via `ALERT_WEBHOOK_URL` secret in
+  the ingest-cron workflow (fires on failure, gracefully skips if unset)
 - **DB query for stale runs** (run manually or via cron):
   ```sql
   SELECT run_id, area_id, started_at, status, summary
@@ -190,9 +190,8 @@ and what is missing.
   ```
 
 ### Known gaps
-- No automated alert on cron failure beyond GitHub's default email
 - No Prometheus/Grafana metrics exported
-- `alerts` and `source_scorecards` tables are not consumed by any dispatch logic
+- `alerts` table is not consumed by any dispatch logic beyond DB storage
 
 ---
 

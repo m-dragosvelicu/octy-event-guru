@@ -165,6 +165,42 @@ class SupabaseWriter:
                     exc_info=True,
                 )
 
+    def upsert_source_scorecard(
+        self,
+        provider: str,
+        area_id: str,
+        health_status: str,
+        metrics: dict,
+    ) -> None:
+        """Upsert a row in source_scorecards for the given provider+area.
+
+        Uses the unique index on (provider, area_id) to avoid unbounded duplicates.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "provider": provider,
+            "area_id": area_id,
+            "health_status": health_status,
+            "last_checked_at": now,
+            "metrics": json.dumps(metrics),
+        }
+        try:
+            (
+                self.client.table("source_scorecards")
+                .upsert(payload, on_conflict="provider,area_id")
+                .execute()
+            )
+            logger.info(
+                "Upserted source scorecard",
+                extra={"provider": provider, "area_id": area_id, "health_status": health_status},
+            )
+        except Exception:
+            logger.warning(
+                "Failed to upsert source scorecard",
+                extra={"provider": provider, "area_id": area_id},
+                exc_info=True,
+            )
+
     def _resolve_activity_id(self, sport_hint: str | None) -> str | None:
         if not sport_hint:
             return None

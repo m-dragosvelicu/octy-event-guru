@@ -152,6 +152,8 @@ def run_ingest_job(
             writer.insert_alerts(alerts)
         else:
             logger.info("Health checks passed", extra={"run_id": run_id})
+
+        _write_source_scorecards(writer, target_area_id, result, alerts)
     else:
         # No DB configured -- still evaluate and log alerts locally
         alerts = check_ingest_health(result)
@@ -187,6 +189,51 @@ def _write_run_report(report_path: str, report: dict) -> dict | None:
     existing_reports.append(report)
     path.write_text(json.dumps(existing_reports, indent=2), encoding="utf-8")
     return prev_run
+
+
+def _write_source_scorecards(
+    writer,
+    area_id: str,
+    result: dict,
+    alerts: list[dict],
+) -> None:
+    """Derive per-provider health status and upsert source_scorecards rows."""
+    domain_stats: dict[str, int] = result.get("domain_stats", {})
+    if not domain_stats:
+        return
+
+    alert_severities = [a["severity"] for a in alerts]
+    has_critical = "critical" in alert_severities
+    has_warning = "warning" in alert_severities
+
+    total_accepted = result.get("accepted", 0)
+
+    for provider, count in domain_stats.items():
+        share_pct = round(count / total_accepted * 100, 2) if total_accepted > 0 else 0.0
+
+        if has_critical:
+            health = "critical"
+        elif has_warning:
+            health = "warning"
+        else:
+            health = "healthy"
+
+        metrics = {
+            "fetched": result.get("fetched", 0),
+            "parsed": result.get("parsed", 0),
+            "accepted": total_accepted,
+            "inserted": result.get("inserted", 0),
+            "dropped_no_coords": result.get("dropped_no_coords", 0),
+            "provider_event_count": count,
+            "provider_share_pct": share_pct,
+        }
+
+        writer.upsert_source_scorecard(
+            provider=provider,
+            area_id=area_id,
+            health_status=health,
+            metrics=metrics,
+        )
 
 
 def _patch_last_run_report(report_path: str, extra: dict) -> None:

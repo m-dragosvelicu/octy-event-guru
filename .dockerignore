@@ -8,3 +8,9 @@ __pycache__/
 .pytest_cache/
 ingest_runs.json
 .env
+.env.*
+tests/
+docker-compose.test.yml
+docs/
+.github/
+.ruff_cache/

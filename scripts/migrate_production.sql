@@ -95,8 +95,14 @@ CREATE TABLE IF NOT EXISTS source_scorecards (
 
 
 -- ===================================================================
--- Unique constraint for deduplication
+-- Unique constraints
 -- ===================================================================
+
+-- source_scorecards: one row per provider+area for upsert
+CREATE UNIQUE INDEX IF NOT EXISTS source_scorecards_provider_area
+    ON source_scorecards (provider, area_id);
+
+-- events: deduplication constraint
 CREATE UNIQUE INDEX IF NOT EXISTS events_external_unique
     ON events (external_provider, external_event_id)
     WHERE external_provider IS NOT NULL
